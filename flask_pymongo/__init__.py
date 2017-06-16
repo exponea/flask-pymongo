@@ -271,19 +271,26 @@ class PyMongo(object):
         if document_class is not None:
             kwargs['document_class'] = document_class
 
-        cx = connection_cls(*args, **kwargs)
-        db = cx[dbname]
+        auth_source = None
+        auth_mechanism = None
 
         if any(auth):
             auth_source = app.config[key('AUTH_SOURCE')]
             auth_mechanism = app.config[key('AUTH_MECHANISM')]
-            auth_db = cx[auth_database]
-            auth_db.logout()
-            auth_db.authenticate(username, password, source=auth_source,
-                                 mechanism=auth_mechanism)
 
-        app.extensions['pymongo'][config_prefix] = (cx, db)
+        extension = Extension(connection_cls, args, kwargs, dbname, auth, auth_source, auth_mechanism)
+        extension.init_client()
+
+        app.extensions['pymongo'][config_prefix] = extension
         app.url_map.converters['ObjectId'] = BSONObjectIdConverter
+
+        # Recreate the client after fork
+        try:
+            from multiprocessing.util import register_after_fork
+        except ImportError:
+            pass
+        else:
+            register_after_fork(extension, Extension._after_fork)
 
     @property
     def cx(self):
@@ -294,7 +301,7 @@ class PyMongo(object):
         """
         if self.config_prefix not in current_app.extensions['pymongo']:
             raise Exception('not initialized. did you forget to call init_app?')
-        return current_app.extensions['pymongo'][self.config_prefix][0]
+        return current_app.extensions['pymongo'][self.config_prefix].cx
 
     @property
     def db(self):
@@ -305,7 +312,7 @@ class PyMongo(object):
         """
         if self.config_prefix not in current_app.extensions['pymongo']:
             raise Exception('not initialized. did you forget to call init_app?')
-        return current_app.extensions['pymongo'][self.config_prefix][1]
+        return current_app.extensions['pymongo'][self.config_prefix].db
 
     # view helpers
     def send_file(self, filename, base='fs', version=-1, cache_for=31536000):
@@ -385,3 +392,37 @@ class PyMongo(object):
 
         storage = GridFS(self.db, base)
         storage.put(fileobj, filename=filename, content_type=content_type)
+
+
+class Extension(object):
+    def __init__(self, connection_cls, connection_args, connection_kwargs, dbname, auth, auth_source, auth_mechanism):
+        self.connection_cls = connection_cls
+        self.connection_args = connection_args
+        self.connection_kwargs = connection_kwargs
+        self.dbname = dbname
+        self.auth = auth
+        self.auth_source = auth_source
+        self.auth_mechanism = auth_mechanism
+
+        self.cx = None
+        self.db = None
+
+    def create_client(self):
+        cx = self.connection_cls(*self.connection_args, **self.connection_kwargs)
+        db = cx[self.dbname]
+
+        if any(self.auth):
+            username, password = self.auth
+            auth_db = cx[self.auth_database]
+            auth_db.logout()
+            auth_db.authenticate(username, password, source=self.auth_source,
+                                 mechanism=self.auth_mechanism)
+
+        return cx, db
+
+    def init_client(self):
+        self.cx, self.db = self.create_client()
+
+    def _after_fork(self):
+        # We need to create a new MongoClient, since it is not fork safe and could cause deadlocks
+        self.init_client()
