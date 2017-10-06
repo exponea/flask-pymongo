@@ -278,7 +278,7 @@ class PyMongo(object):
             auth_source = app.config[key('AUTH_SOURCE')]
             auth_mechanism = app.config[key('AUTH_MECHANISM')]
 
-        extension = Extension(connection_cls, args, kwargs, dbname, auth, auth_source, auth_mechanism)
+        extension = Extension(connection_cls, args, kwargs, dbname, auth, auth_source, auth_mechanism, auth_database)
         extension.init_client()
 
         app.extensions['pymongo'][config_prefix] = extension
@@ -395,7 +395,7 @@ class PyMongo(object):
 
 
 class Extension(object):
-    def __init__(self, connection_cls, connection_args, connection_kwargs, dbname, auth, auth_source, auth_mechanism):
+    def __init__(self, connection_cls, connection_args, connection_kwargs, dbname, auth, auth_source, auth_mechanism, auth_database):
         self.connection_cls = connection_cls
         self.connection_args = connection_args
         self.connection_kwargs = connection_kwargs
@@ -403,6 +403,7 @@ class Extension(object):
         self.auth = auth
         self.auth_source = auth_source
         self.auth_mechanism = auth_mechanism
+        self.auth_database = auth_database
 
         self.cx = None
         self.db = None
